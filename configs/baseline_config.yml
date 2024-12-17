@@ -1,0 +1,18 @@
+# baseline_config.yml
+
+model:
+  name: "BaselineVAEModel"  # Replace with the actual model class name
+  args:
+    encoding_dim: 512  # Default value for encoding_dim
+    hidden_dim: 256  # Default value for hidden_dim
+    latent_dim: 128  # Default value for latent_dim
+    lr: 0.000251  # Default learning rate
+    num_lstm_layers: 5  # Default number of LSTM layers
+
+data_module:
+  function: create_data_module
+  args:
+    batch_size: 4096  # Example value for batch_size
+    path: data/enc_moles_ohe.npy
+    seed: 42
+

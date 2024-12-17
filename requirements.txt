@@ -1,0 +1,25 @@
+# PyTorch and Lightning
+torch>=2.0.0
+lightning>=2.0.0
+torchmetrics>=1.5.0
+
+# Logging and Monitoring
+wandb>=0.16.0
+
+# Scientific Computing
+numpy>=1.23.0
+pandas>=2.0.0
+scipy>=1.8.0
+scikit-learn>=1.2.0
+
+# Molecular Libraries
+rdkit>=2024.03.5  # For chemical data manipulation
+levenshtein~=0.26.1  # String distance calculations
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.2
+
+# Utilities
+prettyprinter>=0.18.0  # Pretty printing with pprint
+pyyaml>=6.0

@@ -1,0 +1,11 @@
+model:
+  name: MoleculeAutoEncoderLightning
+  args:
+    lr: 0.003
+
+data_module:
+  function: create_data_module
+  args:
+    batch_size: 4096
+    path: data/moles_ohe_1M.npy
+    seed: 42

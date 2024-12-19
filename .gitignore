@@ -3,4 +3,8 @@
 checkpoints
 wandb
 
+data
+!data/*.zip
+!data/*.gzip
+
 **/__pycache__

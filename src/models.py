@@ -165,7 +165,7 @@ class MOVVAELightning(L.LightningModule):
         }
 
         self.kl_weight = kl_weight
-        self.loss = nn.CrossEntropyLoss()
+        self.loss = nn.BCEWithLogitsLoss()
         self.int_to_char = int_to_char or {}
         self.charset_size = charset_size
 
@@ -221,7 +221,7 @@ class MOVVAELightning(L.LightningModule):
         dist_hat = torch.distributions.MultivariateNormal(z_mean, scale_tril=torch.diag_embed(std_dev_hat))
 
         kl_loss = torch.distributions.kl.kl_divergence(dist_hat, dist_std).mean()
-        recon_loss = self.loss(x_hat.view(-1, self.hparams.charset_size), x.argmax(-1).view(-1))
+        recon_loss = self.loss(x_hat, x)
 
         return recon_loss, kl_loss
 

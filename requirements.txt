@@ -1,5 +1,10 @@
-# PyTorch and Lightning
+# change the index-url to the appropriate URL for your CUDA version
+--index-url https://download.pytorch.org/whl/cu121
 torch>=2.0.0
+
+# Back to PyPI
+--index-url https://pypi.org/simple/
+
 lightning>=2.0.0
 torchmetrics>=1.5.0
 

@@ -76,37 +76,30 @@ class MOAVEncoder(nn.Module):
             params = params["sampling_layers"]
             activation = getattr(nn, params["activation"])
             self.sampling_layers = nn.Sequential(
-                nn.Linear(in_features, latent_dim * 2),
+                nn.Linear(in_features, latent_dim * 2),  # mean and log_var
                 activation()
             )
 
-    def forward(self, x, eps=1e-2):
-        x = self.conv_layers(x.transpose(-1, -2))
-        x = x.transpose(-1, -2)
+    def forward(self, x, eps=1e-8):
+        """
+        Forward pass of the encoder
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, max_length, charset_length)
+            eps (float): Small value to avoid numerical instability
+        """
+        x = self.conv_layers(x)
         x = x.contiguous().view(x.size(0), -1)
         x = self.dense_layers(x)
         z_mean, z_log_var = self.sampling_layers(x).chunk(2, dim=-1)
 
-        # Compute the standard deviation (scale) directly using exp(log_var / 2)
-        std = torch.exp(z_log_var / 2)
+        std_dev = self.softplus(z_log_var) + eps
+        std_dev_tril = torch.diag_embed(std_dev)
 
-        # Sample epsilon from a standard normal distribution
-        epsilon = torch.randn_like(std)
+        dist = torch.distributions.MultivariateNormal(z_mean, scale_tril=std_dev_tril)
+        z = dist.rsample()
 
-        # Apply the reparameterization trick
-        z = z_mean + std * epsilon
-
-        return z_mean, z_log_var, z
-
-
-class GruWrapper(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers, batch_first=True):
-        super(GruWrapper, self).__init__()
-        self.gru = nn.GRU(input_dim, hidden_dim, num_layers=num_layers, batch_first=batch_first)
-
-    def forward(self, x):
-        out, _ = self.gru(x)
-        return out
+        return z, z_mean, std_dev
 
 
 class MOVAEDecoder(nn.Module):
@@ -128,26 +121,18 @@ class MOVAEDecoder(nn.Module):
             input_dim = layer_params["dimension"]
         self.dense_layers = nn.Sequential(*dense_layers)
 
-        recurrent_layers = []
         recurrent_layers_params = params["recurrent_layers"]
         num_recurrent_layers = recurrent_layers_params["num_layers"]
         h_dim = recurrent_layers_params["dimension"]
-        for i in range(num_recurrent_layers):
-            recurrent_layers.append(GruWrapper(input_dim, h_dim, 1, batch_first=True))
-            input_dim = h_dim   # Update the input dimension for the next layer
-        self.recurrent_layers = nn.Sequential(*recurrent_layers)
+        self.recurrent_layers = nn.GRU(input_dim, h_dim, num_recurrent_layers, batch_first=True)
 
         self.output_layer = nn.Linear(h_dim, self.charset_length)
 
     def forward(self, x):
         x = self.dense_layers(x)
         x = x.unsqueeze(1).repeat(1, self.max_length, 1)
-        x = self.recurrent_layers(x)  # batch, seq_len, h_dim
-        batch_size, seq_len, h_dim = x.size()
-        x = x.contiguous().view(batch_size * seq_len, h_dim)
-        x = self.output_layer(x)
-        x = x.view(batch_size, seq_len, self.charset_length)
-        return x
+        x, _ = self.recurrent_layers(x)  # batch, seq_len, h_dim
+        return self.output_layer(x)
 
 
 class MOVAE(nn.Module):
@@ -160,20 +145,18 @@ class MOVAE(nn.Module):
         self.encoder = MOAVEncoder(encoder_params, charset_length, max_length)
         self.decoder = MOVAEDecoder(decoder_params, charset_length, max_length)
 
-    def reparameterize(self, dist):
-        return dist.rsample()
-
-    def forward(self, x, eps=1e-2):
-        z_mean, z_log_var, z = self.encoder(x)
+    def forward(self, x):
+        z, z_mean, std_dev = self.encoder(x)
         # z = self.reparameterize(dist)
-        return self.decoder(z), z, z_mean, z_log_var
+        return self.decoder(z), z, z_mean, std_dev
 
 
 class MOVVAELightning(L.LightningModule):
-    def __init__(self, params, charset_size, seq_len, lr=1e-3, kl_weight=1e-3, int_to_char=None):
+    def __init__(self, params, charset_size, seq_len, lr=1e-3, kl_weight=1, int_to_char=None):
         super(MOVVAELightning, self).__init__()
         self.save_hyperparameters()
         self.model = MOVAE(params["encoder_params"], params["decoder_params"], charset_size, seq_len)
+
         self.training_params = {
             "rlr_patience": 3,
             "rlr_factor": 0.5,
@@ -181,11 +164,66 @@ class MOVVAELightning(L.LightningModule):
             "rlr_mindelta": 1e-7,
         }
 
-        # Store the character mapping for visualization
+        self.kl_weight = kl_weight
+        self.loss = nn.CrossEntropyLoss()
         self.int_to_char = int_to_char or {}
+        self.charset_size = charset_size
 
-    def forward(self, x):
-        return self.model(x)
+    def training_step(self, batch, batch_idx):
+        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
+        metrics = self.compute_metrics(x_hat, x)
+        lr = self.get_current_lr()
+        self.log_metrics(
+            batch_idx,
+            loss, recon_loss, kl_loss, metrics, "train",
+            lr=lr, z_mean=z_mean, z_log_var=z_log_var,
+            x_hat=x_hat, x=x
+        )
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
+        metrics = self.compute_metrics(x_hat, x)
+        self.log_metrics(
+            batch_idx,
+            loss, recon_loss, kl_loss, metrics, "val",
+            z_mean=z_mean, z_log_var=z_log_var,
+            x_hat=x_hat, x=x
+        )
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
+        metrics = self.compute_metrics(x_hat, x)
+        self.log_metrics(
+            batch_idx,
+            loss, recon_loss, kl_loss, metrics, "test",
+            z_mean=z_mean, z_log_var=z_log_var,
+            x_hat=x_hat, x=x
+        )
+        return loss
+
+    def forward_pass(self, batch):
+        """
+        Modified forward pass to return additional information
+        """
+        x = batch[0]
+        x_hat, z, z_mean, std_dev = self.model(x.transpose(-1, -2))
+        recon_loss, kl_loss = self.loss_function(x_hat, x, z_mean, std_dev)
+        loss = recon_loss + kl_loss * self.kl_weight
+        return loss, recon_loss, kl_loss, x_hat, x, z_mean, std_dev
+
+    def loss_function(self, x_hat, x, z_mean, std_dev_hat):
+        dist_std = torch.distributions.MultivariateNormal(
+            torch.zeros_like(z_mean, device=z_mean.device),
+            scale_tril=torch.eye(z_mean.shape[-1], device=z_mean.device).unsqueeze(0).repeat(z_mean.shape[0], 1, 1)
+        )
+        dist_hat = torch.distributions.MultivariateNormal(z_mean, scale_tril=torch.diag_embed(std_dev_hat))
+
+        kl_loss = torch.distributions.kl.kl_divergence(dist_hat, dist_std).mean()
+        recon_loss = self.loss(x_hat.view(-1, self.hparams.charset_size), x.argmax(-1).view(-1))
+
+        return recon_loss, kl_loss
 
     def compute_metrics(self, x_hat, x):
         """
@@ -210,7 +248,8 @@ class MOVVAELightning(L.LightningModule):
         """
         return self.optimizers().param_groups[0]["lr"]
 
-    def log_metrics(self, batch_idx, loss, recon_loss, kl_loss, metrics, prefix, lr=None, z_mean=None, z_log_var=None, x_hat=None,
+    def log_metrics(self, batch_idx, loss, recon_loss, kl_loss, metrics, prefix, lr=None, z_mean=None, z_log_var=None,
+                    x_hat=None,
                     x=None):
         """
         Enhanced logging method to include z_mean and z_log_var statistics
@@ -249,6 +288,21 @@ class MOVVAELightning(L.LightningModule):
             self.log_token_distribution_visualization(x_hat, x, prefix)
             # self.log_distance_correlation_visualization(z_mean, x, prefix)
 
+    def log_prediction_visualization(self, x_hat, x, prefix):
+        """
+        Generate and log visualization of the model's predictions
+        :param x_hat: model predictions logits
+        :param x: one hot target sequences
+        :param prefix: logging prefix
+        :return: None
+        """
+        img = prediction_visualization_figure(x_hat, x, self.charset_size, self.int_to_char)
+        self.logger.log_image(f'{prefix}/predictions', images=[img])
+
+    def log_token_distribution_visualization(self, x_hat, x, prefix):
+        img = token_distribution_visualization_figure(x_hat, x, self.int_to_char)
+        self.logger.log_image(f'{prefix}/token_distribution', images=[img])
+
     def log_distance_correlation_visualization(self, z_mean, smiles_vectors, prefix):
         """
         Generate and log multiple visualizations of the latent space
@@ -262,10 +316,6 @@ class MOVVAELightning(L.LightningModule):
         img = distance_correlation_figure(z_mean, smiles_vectors, max_samples=16)
         self.logger.log_image(f'{prefix}/distance_correlation', images=[img])
 
-    def log_token_distribution_visualization(self, x_hat, x, prefix):
-        img = token_distribution_visualization_figure(x_hat, x, self.int_to_char)
-        self.logger.log_image(f'{prefix}/token_distribution', images=[img])
-
     def log_latent_space_visualization(self, z_mean, prefix):
         """
         Generate and log visualization of the latent space mean representations
@@ -273,79 +323,10 @@ class MOVVAELightning(L.LightningModule):
         img = latent_space_visualization_figure(z_mean)
         self.logger.log_image(f'{prefix}/latent_space', images=[img])
 
-    def log_prediction_visualization(self, x_hat, x, prefix):
-        """
-        Generate and log visualization of the model's predictions
-        :param x_hat: model predictions logits
-        :param x: one hot target sequences
-        :param prefix: logging prefix
-        :return: None
-        """
-        img = prediction_visualization_figure(x_hat, x, self.int_to_char)
-        self.logger.log_image(f'{prefix}/predictions', images=[img])
-
-    def forward_pass(self, batch):
-        """
-        Modified forward pass to return additional information
-        """
-        x = batch[0]
-        x_hat, z, z_mean, z_log_var = self.model(x)
-        recon_loss, kl_loss = self.loss_function(x_hat, x, z_mean, z_log_var)
-        loss = recon_loss + kl_loss * self.hparams.kl_weight
-        return loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var
-
     def on_before_optimizer_step(self, optimizer):
         pass
         # Gradient clipping
         # torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-
-    def training_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
-        metrics = self.compute_metrics(x_hat, x)
-        lr = self.get_current_lr()
-        self.log_metrics(
-            batch_idx,
-            loss, recon_loss, kl_loss, metrics, "train",
-            lr=lr, z_mean=z_mean, z_log_var=z_log_var,
-            x_hat=x_hat, x=x
-        )
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
-        metrics = self.compute_metrics(x_hat, x)
-        self.log_metrics(
-            batch_idx,
-            loss, recon_loss, kl_loss, metrics, "val",
-            z_mean=z_mean, z_log_var=z_log_var,
-            x_hat=x_hat, x=x
-        )
-        return loss
-
-    # Similar modification needed for test_step
-    def test_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
-        metrics = self.compute_metrics(x_hat, x)
-        self.log_metrics(
-            batch_idx,
-            loss, recon_loss, kl_loss, metrics, "test",
-            z_mean=z_mean, z_log_var=z_log_var,
-            x_hat=x_hat, x=x
-        )
-        return loss
-
-    def loss_function(self, x_hat, x, z_mean, z_log_var):
-        # If x is one-hot, use binary cross-entropy
-        recon_loss = nn.functional.binary_cross_entropy_with_logits(
-            x_hat.view(-1, self.hparams.charset_size),
-            x.view(-1, self.hparams.charset_size),
-            reduction='mean'
-        )
-
-        # KL divergence calculation closer to TensorFlow implementation
-        kl_loss = -0.5 * torch.mean(1 + z_log_var - z_mean.pow(2) - z_log_var.exp())
-
-        return recon_loss, kl_loss
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.training_params["rlr_initial_lr"])
@@ -360,9 +341,12 @@ class MOVVAELightning(L.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_recon_loss"  # The metric to monitor
+                "monitor": "val/recon_loss"  # The metric to monitor
             }
         }
+
+    def forward(self, x):
+        return self.model(x)
 
 
 class MoleculeAutoEncoder(nn.Module):

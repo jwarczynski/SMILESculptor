@@ -76,7 +76,7 @@ def parse_args():
         help="Path to the data file (default: None, will use value from config if not specified)."
     )
     parser.add_argument(
-        "--int-to-char-path", type=str, default="data/int_to_char_1M.pkl",
+        "--int-to-char-path", type=str, default="data/itc_500k.pkl",
         help="Path to the 'int_to_char.pkl' file (default: None, will use value from config if not specified)."
     )
     parser.add_argument(
@@ -188,13 +188,13 @@ if __name__ == "__main__":
     if args.moles_path is not None:
         data_module_config["args"]["path"] = args.moles_path
 
-    print(data_module_config["args"]["path"])
+    print(f'moles path: {data_module_config["args"]["path"]}')
     data_module_result = call_function(data_module_config["function"], data_module_config["args"])
     data_module, max_len, _ = data_module_result
 
-    with open(args.int_to_char_path, 'rb') as file:
-        print(f'dictionary path: {args.int_to_char_path}')
-        int_to_char = pickle.load(file)
+    # with open(args.int_to_char_path, 'rb') as file:
+    #     print(f'dictionary path: {args.int_to_char_path}')
+    #     int_to_char = pickle.load(file)
 
     if args.vectorizer_path is not None:
         pprint(f'vectorizer path: {args.vectorizer_path}')
@@ -207,7 +207,7 @@ if __name__ == "__main__":
         "charset_size": len(int_to_char),
         "int_to_char": int_to_char
     }
-    pprint(calculated_args)
+    pprint(f'calculated args: {calculated_args}')
 
     # Merge calculated args with YAML-configured args for the model
     model_config = config.get("model", {})
@@ -240,7 +240,7 @@ if __name__ == "__main__":
             ModelCheckpoint(
                 monitor=args.early_stopping_monitor, save_top_k=3, mode=args.early_stopping_mode,
                 dirpath=f'checkpoints/{args.run_name}',
-                filename=f'{args.run_name}-{{epoch:02d}}-{{{args.early_stopping_monitor}:.2f}}',
+                filename=f'epoch={{epoch:02d}}-step={{step}}-loss={{{args.early_stopping_monitor}:.2f}}',
                 save_last=True,
                 auto_insert_metric_name=False
             )

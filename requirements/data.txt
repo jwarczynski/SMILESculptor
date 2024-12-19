@@ -1,0 +1,5 @@
+# Molecular Libraries
+rdkit>=2024.03.5  # For chemical data manipulation
+
+numpy>=1.23.0
+pandas>=2.0.0

@@ -16,10 +16,10 @@ numpy>=1.23.0
 pandas>=2.0.0
 scipy>=1.8.0
 scikit-learn>=1.2.0
+levenshtein~=0.26.1  # String distance calculations
 
 # Molecular Libraries
 rdkit>=2024.03.5  # For chemical data manipulation
-levenshtein~=0.26.1  # String distance calculations
 
 # Visualization
 matplotlib>=3.5.0

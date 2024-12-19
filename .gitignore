@@ -1,5 +1,6 @@
 .idea
 .tox
+checkpoints
 wandb
 
 **/__pycache__

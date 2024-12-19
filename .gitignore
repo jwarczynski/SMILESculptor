@@ -1,3 +1,5 @@
 .idea
 .tox
 wandb
+
+**/__pycache__

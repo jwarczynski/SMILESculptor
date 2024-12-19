@@ -461,7 +461,6 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
 
         # Loss Function
         self.binary_cross_entropy = nn.BCEWithLogitsLoss()
-        self.cross_entropy = nn.CrossEntropyLoss(ignore_index=self.char_to_int["?"])
 
         self.scheduler_params = {
             "rlr_patience": 3,
@@ -504,20 +503,17 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         # Reconstruct
         decoded = self(x)
 
-        # Reconstruction Loss (Binary Cross Entropy)
         bce_recon_loss = self.binary_cross_entropy(decoded, y)
-        ce_recon_loss = self.cross_entropy(decoded.view(-1, self.charset_length), y.argmax(-1).view(-1))
 
-        self.compute_and_log_metrics(bce_recon_loss, ce_recon_loss, decoded, y, batch_idx, prefix)
-        return ce_recon_loss
+        self.compute_and_log_metrics(bce_recon_loss, decoded, y, batch_idx, prefix)
+        return bce_recon_loss
 
-    def compute_and_log_metrics(self, bce_recon_loss, ce_loss, decoded, y, batch_idx, prefix):
+    def compute_and_log_metrics(self, loss, decoded, y, batch_idx, prefix):
         """
         Compute and log metrics for the current step.
 
         Args:
-            bce_recon_loss: The binary cross entropy reconstruction loss for the current step.
-            ce_loss: The cross-entropy loss for the current step.
+            loss: The reconstruction loss for the current step.
             decoded: The model's predictions.
             y: The ground truth sequences.
             batch_idx: The index of the current batch.
@@ -528,8 +524,7 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         """
 
         # Log reconstruction loss
-        self.log(f'{prefix}/binary_ce_recon_loss', bce_recon_loss, prog_bar=True, sync_dist=True)
-        self.log(f'{prefix}/cross_entropy_recon_loss', ce_loss, prog_bar=True, sync_dist=True)
+        self.log(f'{prefix}/binary_ce_recon_loss', loss, prog_bar=True, sync_dist=True)
 
         # Log learning rate only if not in test phase
         if self.trainer.state.stage != "test":
@@ -578,7 +573,7 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val/recon_loss"  # The metric to monitor
+                "monitor": "val/binary_ce_recon_loss"  # The metric to monitor
             }
         }
 

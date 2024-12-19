@@ -129,14 +129,11 @@ if __name__ == "__main__":
 
     df = pd.read_csv(DATA_DIR / 'zinc22_random.zip', compression='zip')
 
+    df['SMILES_st'] = df['SMILES'].map(remove_stereochemistry)
+    df = df.drop_duplicates(subset='SMILES_st')
+    
     num_samples = min(NUM_SAMPLES, df.shape[0])
     df_sample = df.sample(num_samples, random_state=RANDOM_STATE)
-
-    # df_sample['SMILES'] = df_sample['SMILES'].map(lambda x: x.replace('@', '').replace('/', '').replace('\\', ''))
-    # df_sample['SMILES_st'] = df_sample['SMILES'].map(standardize)
-    df_sample['SMILES_st'] = df_sample['SMILES'].map(remove_stereochemistry)
-    # remove duplicates
-    df_sample = df_sample.drop_duplicates(subset='SMILES_st')
 
     mols = [Chem.MolFromSmiles(item) for item in df_sample['SMILES_st']]
 
@@ -147,21 +144,15 @@ if __name__ == "__main__":
     print(f'chaserset length: {len(sv.charset)}')
 
     enc_mols = sv.transform(mols)
+    print(f'encoded moles shape: {enc_mols.shape}')
 
     np.save(MOLES_SAVE_PATH, enc_mols)
-    e_mols = np.load(MOLES_SAVE_PATH)
-    print(f'encoded moles shape: {e_mols.shape}')
-    print(f'saved moles equal loaded moles: {np.all(e_mols == enc_mols)}')
+    print(f'Saved encoded moles to {MOLES_SAVE_PATH}')
 
     with open(IDX_TO_CHR_PATH, 'wb') as f:
-        pickle.dump(sv._int_to_char, f)
+        pickle.dump(sv.int_to_char, f)
+        print(f'Saved index to character mapping to {IDX_TO_CHR_PATH}')
 
     with open(VECT_PATH, 'wb') as f:
         pickle.dump(sv, f)
-
-    # if not ene hot encoded then transform
-    # convert_to_ohe_and_save(
-    #     "data/moles_ohe_1M.npy",
-    #     "data/moles_ohe_1M_one_hot.npy",
-    #     "data/int_to_char_1M.pkl"
-    # )
+        print(f'Saved vectorizer to {VECT_PATH}')

@@ -33,17 +33,17 @@ model:
             name: encoder_dense_1
             dropout: 0.083
             batch_norm: True
-        sampling_layers:
-          activation: Tanh
-          mean: 0.0
-          stddev: 0.01
-        latent_dimension: 192
+#        sampling_layers:
+#          activation: Tanh
+#          mean: 0.0
+#          stddev: 0.01
+#        latent_dimension: 192
 
       decoder_params:
-        latent_dimension: 192
+        latent_dimension: 436
         dense_layers:
           dense_1:
-            dimension: 192
+            dimension: 436
             activation: Tanh
             name: encoder_dense_1
             dropout: 0.1

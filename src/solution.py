@@ -48,6 +48,10 @@ def parse_args():
         help="Path to the YAML configuration file."
     )
     parser.add_argument(
+        "--loss", type=str, required=True, choices=["bce", "ce"],
+        help="Path to the YAML configuration file."
+    )
+    parser.add_argument(
         "--run-name", type=str, required=True,
         help="Name of the run (required)."
     )
@@ -192,10 +196,6 @@ if __name__ == "__main__":
     data_module_result = call_function(data_module_config["function"], data_module_config["args"])
     data_module, max_len, _ = data_module_result
 
-    # with open(args.int_to_char_path, 'rb') as file:
-    #     print(f'dictionary path: {args.int_to_char_path}')
-    #     int_to_char = pickle.load(file)
-
     if args.vectorizer_path is not None:
         pprint(f'vectorizer path: {args.vectorizer_path}')
         sv = pickle.load(open(args.vectorizer_path, 'rb'))
@@ -211,7 +211,7 @@ if __name__ == "__main__":
 
     # Merge calculated args with YAML-configured args for the model
     model_config = config.get("model", {})
-    model_args = {**model_config["args"], **calculated_args}
+    model_args = {**model_config["args"], **calculated_args, "loss": args.loss}
 
     # Instantiate the model
     model = instantiate_class(model_config["name"], model_args)

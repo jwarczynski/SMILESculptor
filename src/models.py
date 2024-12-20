@@ -30,6 +30,7 @@ class MOAVEncoder(nn.Module):
         self.charset_length = charset_length
         self.max_length = max_length
         self.softplus = nn.Softplus()
+        self.flatten = nn.Flatten()
 
         # Build convolutional layers
         conv_layers = []
@@ -71,35 +72,26 @@ class MOAVEncoder(nn.Module):
 
         self.dense_layers = nn.Sequential(*dense_layers)
 
-        latent_dim = params["latent_dimension"]
         if "sampling_layers" in params:
+            latent_dim = params["latent_dimension"]
             params = params["sampling_layers"]
             activation = getattr(nn, params["activation"])
             self.sampling_layers = nn.Sequential(
-                nn.Linear(in_features, latent_dim * 2),  # mean and log_var
+                nn.Linear(in_features, latent_dim),
                 activation()
             )
 
-    def forward(self, x, eps=1e-8):
+    def forward(self, x):
         """
         Forward pass of the encoder
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, max_length, charset_length)
-            eps (float): Small value to avoid numerical instability
+            x (torch.Tensor): Input tensor of shape (batch_size, max_length, charset_size)
         """
         x = self.conv_layers(x)
-        x = x.contiguous().view(x.size(0), -1)
+        x = self.flatten(x)
         x = self.dense_layers(x)
-        z_mean, z_log_var = self.sampling_layers(x).chunk(2, dim=-1)
-
-        std_dev = self.softplus(z_log_var) + eps
-        std_dev_tril = torch.diag_embed(std_dev)
-
-        dist = torch.distributions.MultivariateNormal(z_mean, scale_tril=std_dev_tril)
-        z = dist.rsample()
-
-        return z, z_mean, std_dev
+        return self.sampling_layers(x) if hasattr(self, "sampling_layers") else x
 
 
 class MOVAEDecoder(nn.Module):
@@ -113,12 +105,17 @@ class MOVAEDecoder(nn.Module):
         input_dim = params["latent_dimension"]
         for _, layer_params in params["dense_layers"].items():
             dense_layers.append(nn.Linear(input_dim, layer_params["dimension"]))
-            if "dropout" in layer_params:
-                dense_layers.append(nn.Dropout(layer_params["dropout"]))
+
             if "batch_norm" in layer_params:
                 dense_layers.append(nn.BatchNorm1d(layer_params["dimension"]))
+
             dense_layers.append(getattr(nn, layer_params["activation"])())
+
+            if "dropout" in layer_params:
+                dense_layers.append(nn.Dropout(layer_params["dropout"]))
+
             input_dim = layer_params["dimension"]
+
         self.dense_layers = nn.Sequential(*dense_layers)
 
         recurrent_layers_params = params["recurrent_layers"]
@@ -146,204 +143,221 @@ class MOVAE(nn.Module):
         self.decoder = MOVAEDecoder(decoder_params, charset_length, max_length)
 
     def forward(self, x):
-        z, z_mean, std_dev = self.encoder(x)
-        # z = self.reparameterize(dist)
-        return self.decoder(z), z, z_mean, std_dev
+        encoded = self.encoder(x)
+        print(encoded.shape)
+        return self.decoder(encoded)
 
 
 class MOVVAELightning(L.LightningModule):
-    def __init__(self, params, charset_size, seq_len, lr=1e-3, kl_weight=1, int_to_char=None):
+    def __init__(self, params, charset_size, seq_len, loss, lr=1e-3, kl_weight=1, int_to_char=None):
         super(MOVVAELightning, self).__init__()
         self.save_hyperparameters()
         self.model = MOVAE(params["encoder_params"], params["decoder_params"], charset_size, seq_len)
 
-        self.training_params = {
+        self.scheduler_params = {
             "rlr_patience": 3,
             "rlr_factor": 0.5,
             "rlr_initial_lr": lr,
             "rlr_mindelta": 1e-7,
         }
 
+        self.learning_rate = lr
         self.kl_weight = kl_weight
-        self.loss = nn.BCEWithLogitsLoss()
+        self.loss = loss
+        self.bce_loss = nn.BCEWithLogitsLoss()
+        self.ce_loss = nn.CrossEntropyLoss()
         self.int_to_char = int_to_char or {}
+        self.char_to_int = {v: k for k, v in int_to_char.items()}
         self.charset_size = charset_size
 
+        # Classification metrics
+        self.perfect_recon_tracker = torchmetrics.MeanMetric()
+
+        self.binarized_accuracy = torchmetrics.Accuracy(task='binary')
+        self.binarized_precision = torchmetrics.Precision(task='binary')
+        self.binarized_recall = torchmetrics.Recall(task='binary')
+        self.binarized_f1 = torchmetrics.F1Score(task='binary')
+
+        self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=charset_size)
+        self.precision = torchmetrics.Precision(task='multiclass', num_classes=charset_size)
+        self.recall = torchmetrics.Recall(task='multiclass', num_classes=charset_size)
+        self.f1 = torchmetrics.F1Score(task='multiclass', num_classes=charset_size)
+
     def training_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
-        metrics = self.compute_metrics(x_hat, x)
-        lr = self.get_current_lr()
-        self.log_metrics(
-            batch_idx,
-            loss, recon_loss, kl_loss, metrics, "train",
-            lr=lr, z_mean=z_mean, z_log_var=z_log_var,
-            x_hat=x_hat, x=x
-        )
-        return loss
+        return self.forward_step(batch, batch_idx, prefix='train')
 
     def validation_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
-        metrics = self.compute_metrics(x_hat, x)
-        self.log_metrics(
-            batch_idx,
-            loss, recon_loss, kl_loss, metrics, "val",
-            z_mean=z_mean, z_log_var=z_log_var,
-            x_hat=x_hat, x=x
-        )
-        return loss
+        return self.forward_step(batch, batch_idx, prefix='val')
 
     def test_step(self, batch, batch_idx):
-        loss, recon_loss, kl_loss, x_hat, x, z_mean, z_log_var = self.forward_pass(batch)
-        metrics = self.compute_metrics(x_hat, x)
-        self.log_metrics(
-            batch_idx,
-            loss, recon_loss, kl_loss, metrics, "test",
-            z_mean=z_mean, z_log_var=z_log_var,
-            x_hat=x_hat, x=x
-        )
-        return loss
+        return self.forward_step(batch, batch_idx, prefix='test')
 
-    def forward_pass(self, batch):
-        """
-        Modified forward pass to return additional information
-        """
+    def forward_step(self, batch, batch_idx, prefix):
         x = batch[0]
-        x_hat, z, z_mean, std_dev = self.model(x.transpose(-1, -2))
-        recon_loss, kl_loss = self.loss_function(x_hat, x, z_mean, std_dev)
-        loss = recon_loss + kl_loss * self.kl_weight
-        return loss, recon_loss, kl_loss, x_hat, x, z_mean, std_dev
+        y = x.clone()
+        x = x.transpose(-2, -1)
 
-    def loss_function(self, x_hat, x, z_mean, std_dev_hat):
-        dist_std = torch.distributions.MultivariateNormal(
-            torch.zeros_like(z_mean, device=z_mean.device),
-            scale_tril=torch.eye(z_mean.shape[-1], device=z_mean.device).unsqueeze(0).repeat(z_mean.shape[0], 1, 1)
-        )
-        dist_hat = torch.distributions.MultivariateNormal(z_mean, scale_tril=torch.diag_embed(std_dev_hat))
+        # Reconstruct
+        decoded = self(x)
 
-        kl_loss = torch.distributions.kl.kl_divergence(dist_hat, dist_std).mean()
-        recon_loss = self.loss(x_hat, x)
+        bce_recon_loss = self.loss_function(decoded, y, "bce")
+        ce_loss = self.loss_function(decoded, y, "ce")
 
-        return recon_loss, kl_loss
+        self.compute_and_log_metrics(bce_recon_loss, ce_loss, decoded, y, batch_idx, prefix)
+        return bce_recon_loss if self.loss == "bce" else ce_loss
 
-    def compute_metrics(self, x_hat, x):
+    def loss_function(self, x_hat, x, loss):
+        if loss == "bce":
+            return self.bce_loss(x_hat, x)
+        elif loss == "ce":
+            return self.ce_loss(x_hat.view(-1, self.charset_size), x.argmax(dim=-1).view(-1))
+        else:
+            raise ValueError(f"Invalid loss function: {self.loss}")
+
+    def compute_and_log_metrics(self, bce_loss, ce_loss, decoded, y, batch_idx, prefix):
         """
-        Compute metrics: percentage of perfectly reconstructed sequences
-        and percentage of correctly recognized elements.
+        Compute and log metrics for the current step.
+
+        Args:
+            :param bce_loss: The reconstruction bce_loss for the current step.
+            :param ce_loss: The reconstruction ce_loss for the current step.
+            :param decoded: The model's predictions.
+            :param y: The ground truth sequences.
+            :param batch_idx: The index of the current batch.
+            :param prefix: The prefix for logging (e.g., 'train', 'val', 'test').
+
+        Returns:
+            recon_loss: The reconstruction bce_loss for the current step.
         """
-        predictions = x_hat.argmax(-1)  # Take argmax of predictions
-        targets = x.argmax(-1)  # Convert one-hot encoded targets to indices
+
+        # Log reconstruction bce_loss
+        self.log(f'{prefix}/binary_ce_recon_loss', bce_loss, prog_bar=True, sync_dist=True)
+        self.log(f'{prefix}/cross_entropy_recon_loss', ce_loss, prog_bar=True, sync_dist=True)
+
+        # Log learning rate only if not in test phase
+        if self.trainer.state.stage != "test":
+            self.log(f"{prefix}/lr", self.get_current_lr(), prog_bar=True)
+
+        # Compute metrics
+        y_hat = decoded.argmax(dim=-1)
+        y_classes = y.argmax(dim=-1)
 
         # Perfectly reconstructed molecules
-        is_perfect = (predictions == targets).all(dim=1)
-        perfect_recon_percentage = is_perfect.float().mean() * 100  # Percentage
+        is_perfect = (y_hat == y_classes).all(dim=1)
+        perfect_recon_count = is_perfect.sum()  # Total perfect reconstructions
+        total_molecules = is_perfect.numel()  # Total molecules in the batch
+        self.perfect_recon_tracker.update(perfect_recon_count / total_molecules)  # Track proportion
 
-        # Correctly recognized elements
-        correct_elements_percentage = (predictions == targets).float().mean() * 100  # Percentage
+        self.binarized_accuracy.update(decoded, y)
+        self.binarized_precision.update(decoded, y)
+        self.binarized_recall.update(decoded, y)
+        self.binarized_f1.update(decoded, y)
+        self.accuracy.update(y_hat, y_classes)
+        self.precision.update(y_hat, y_classes)
+        self.recall.update(y_hat, y_classes)
+        self.f1.update(y_hat, y_classes)
 
-        return perfect_recon_percentage, correct_elements_percentage
+        # Log predictions visualization periodically
+        if batch_idx % 10 == 0:
+            predictions_img = prediction_visualization_figure(decoded, y, self.charset_size, self.int_to_char)
+            token_dist_img = token_distribution_visualization_figure(decoded, y, self.int_to_char)
+            self.logger.log_image(f'{prefix}/predictions', images=[predictions_img])
+            self.logger.log_image(f'{prefix}/token_distribution', images=[token_dist_img])
 
     def get_current_lr(self):
         """
         Retrieve the current learning rate from the optimizer.
         """
+        # return self.lr_schedulers().get_last_lr()[0]
         return self.optimizers().param_groups[0]["lr"]
 
-    def log_metrics(self, batch_idx, loss, recon_loss, kl_loss, metrics, prefix, lr=None, z_mean=None, z_log_var=None,
-                    x_hat=None,
-                    x=None):
-        """
-        Enhanced logging method to include z_mean and z_log_var statistics
-        and optional prediction visualizations
-        """
-        perfect_recon, correct_elements = metrics
-        log_dict = {
-            f"{prefix}/loss": loss,
-            f"{prefix}/recon_loss": recon_loss,
-            f"{prefix}/kl_loss": kl_loss,
-            f"{prefix}/perfect_recon": perfect_recon,
-            f"{prefix}/correct_elements": correct_elements
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.scheduler_params["rlr_initial_lr"])
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=self.scheduler_params["rlr_factor"],
+            patience=self.scheduler_params["rlr_patience"],
+            min_lr=self.scheduler_params["rlr_mindelta"]
+        )
+        return {
+            "optimizer": optimizer,
+            # "lr_scheduler": {
+            #     "scheduler": scheduler,
+            #     "monitor": "val/binary_ce_recon_loss"  # The metric to monitor
+            # }
         }
-
-        # Log z_mean and z_log_var statistics if provided
-        if z_mean is not None and z_log_var is not None:
-            log_dict[f"{prefix}/z_mean_norm"] = torch.norm(z_mean)
-            log_dict[f"{prefix}/z_log_var_mean"] = z_log_var.mean()
-            log_dict[f"{prefix}/z_log_var_std"] = z_log_var.std()
-
-            # Optional: Visualize z distribution
-            self.log_latent_space_visualization(z_mean, prefix)
-
-        if lr is not None:
-            log_dict[f"{prefix}/lr"] = lr
-
-        # Log metrics
-        if prefix == "train":
-            self.log_dict(log_dict, on_step=True, on_epoch=True, prog_bar=True)
-        else:
-            self.log_dict(log_dict, on_epoch=True, prog_bar=True)
-
-        # Visualization of predictions
-        if x_hat is not None and x is not None and (prefix != "train" or batch_idx % 100 == 0):
-            self.log_prediction_visualization(x_hat, x, prefix)
-            self.log_token_distribution_visualization(x_hat, x, prefix)
-            # self.log_distance_correlation_visualization(z_mean, x, prefix)
-
-    def log_prediction_visualization(self, x_hat, x, prefix):
-        """
-        Generate and log visualization of the model's predictions
-        :param x_hat: model predictions logits
-        :param x: one hot target sequences
-        :param prefix: logging prefix
-        :return: None
-        """
-        img = prediction_visualization_figure(x_hat, x, self.charset_size, self.int_to_char)
-        self.logger.log_image(f'{prefix}/predictions', images=[img])
-
-    def log_token_distribution_visualization(self, x_hat, x, prefix):
-        img = token_distribution_visualization_figure(x_hat, x, self.int_to_char)
-        self.logger.log_image(f'{prefix}/token_distribution', images=[img])
-
-    def log_distance_correlation_visualization(self, z_mean, smiles_vectors, prefix):
-        """
-        Generate and log multiple visualizations of the latent space
-
-        Args:
-        z_mean (torch.Tensor): Latent space mean representations
-        smiles_vectors (np.ndarray): One-hot encoded SMILES vectors
-        prefix (str): Logging prefix for tracking
-        """
-
-        img = distance_correlation_figure(z_mean, smiles_vectors, max_samples=16)
-        self.logger.log_image(f'{prefix}/distance_correlation', images=[img])
-
-    def log_latent_space_visualization(self, z_mean, prefix):
-        """
-        Generate and log visualization of the latent space mean representations
-        """
-        img = latent_space_visualization_figure(z_mean)
-        self.logger.log_image(f'{prefix}/latent_space', images=[img])
 
     def on_before_optimizer_step(self, optimizer):
         pass
         # Gradient clipping
         # torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.training_params["rlr_initial_lr"])
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=self.training_params["rlr_factor"],
-            patience=self.training_params["rlr_patience"],
-            min_lr=self.training_params["rlr_mindelta"]
-        )
+    def sync_metric(self, metric):
+        """
+        Synchronizes a metric across distributed processes.
+
+        Args:
+            metric (float or torch.Tensor): The metric value to synchronize.
+
+        Returns:
+            float: The synchronized metric value.
+        """
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            # Ensure the metric is a tensor and move it to the correct device
+            if not isinstance(metric, torch.Tensor):
+                metric = torch.tensor(metric, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+            else:
+                metric = metric.clone().detach()
+
+            # Perform distributed all-reduce operation
+            all_reduce(metric, op=ReduceOp.SUM)
+            metric /= torch.distributed.get_world_size()
+            return metric.item()
+        return metric
+
+    def log_and_reset_metrics(self, prefix):
+        """
+        Logs and resets metrics with a given prefix.
+
+        Args:
+            prefix (str): The prefix for the metric names (e.g., 'epoch', 'test', 'val').
+        """
+        for name, metric in self.get_metrics().items():
+            # Compute metric and sync if in distributed mode
+            metric_value = metric.compute()
+            metric_value = self.sync_metric(metric_value)
+
+            # Log the synchronized metric
+            self.logger.experiment.log({f'{prefix}/{name}': metric_value, 'epoch': self.current_epoch})
+
+            # Reset the metric
+            metric.reset()
+
+    def get_metrics(self):
+        """
+        Returns a dictionary of common metrics to log and reset.
+        """
         return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val/recon_loss"  # The metric to monitor
-            }
+            'perfect_reconstruction': self.perfect_recon_tracker,
+            'binarized_accuracy': self.binarized_accuracy,
+            'binarized_precision': self.binarized_precision,
+            'binarized_recall': self.binarized_recall,
+            'binarized_f1': self.binarized_f1,
+            'accuracy': self.accuracy,
+            'precision': self.precision,
+            'recall': self.recall,
+            'f1': self.f1
         }
+
+    def on_validation_start(self) -> None:
+        self.log_and_reset_metrics("train_epoch")  # validation perform before train epoch_end
+
+    def on_test_end(self):
+        self.log_and_reset_metrics('test')
+
+    def on_validation_end(self):
+        self.log_and_reset_metrics('val')
 
     def forward(self, x):
         return self.model(x)
@@ -388,7 +402,6 @@ class MoleculeAutoEncoder(nn.Module):
         self.reconstruct = nn.Linear(self.gru_hidden_size, charset_length)
 
     def encode(self, x):
-        # Convolutional Layers
         x = self.conv1(x)
         x = self.bn1(x)
         x = torch.tanh(x)
@@ -401,10 +414,8 @@ class MoleculeAutoEncoder(nn.Module):
         x = self.bn3(x)
         x = torch.tanh(x)
 
-        # Flatten
         x = self.flatten(x)
 
-        # Dense Layers
         x = self.dense1(x)
         x = self.bn_dense1(x)
         x = torch.tanh(x)
@@ -442,40 +453,35 @@ class MoleculeAutoEncoder(nn.Module):
 
 
 class MoleculeAutoEncoderLightning(L.LightningModule):
-    def __init__(self,
-                 charset_size,
-                 seq_len,
-                 int_to_char,
-                 lr=1e-3):
+    def __init__(self, charset_size, seq_len, loss, int_to_char, lr=1e-3):
         super().__init__()
 
         # Model Architecture
-        self.charset_length = charset_size
-        self.max_length = seq_len
+        self.charset_size = charset_size
 
-        self.idx_to_char = int_to_char
+        self.int_to_char = int_to_char
         self.char_to_int = {v: k for k, v in int_to_char.items()}
 
         # Model
         self.model = MoleculeAutoEncoder(charset_size, seq_len)
 
         # Loss Function
-        self.binary_cross_entropy = nn.BCEWithLogitsLoss()
+        self.loss = loss
+        self.bce_loss = nn.BCEWithLogitsLoss()
+        self.ce_loss = nn.CrossEntropyLoss()
 
+        # Learning Rate Scheduler Parameters
         self.scheduler_params = {
             "rlr_patience": 3,
             "rlr_factor": 0.5,
             "rlr_initial_lr": lr,
             "rlr_mindelta": 1e-7,
         }
-
         self.learning_rate = lr
 
-        # Tracking metrics
-        # self.total_loss_tracker = torchmetrics.MeanMetric()
-        # self.reconstruction_loss_tracker = torchmetrics.MeanMetric()
-
         # Classification metrics
+        self.perfect_recon_tracker = torchmetrics.MeanMetric()
+
         self.binarized_accuracy = torchmetrics.Accuracy(task='binary')
         self.binarized_precision = torchmetrics.Precision(task='binary')
         self.binarized_recall = torchmetrics.Recall(task='binary')
@@ -486,14 +492,14 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         self.recall = torchmetrics.Recall(task='multiclass', num_classes=charset_size)
         self.f1 = torchmetrics.F1Score(task='multiclass', num_classes=charset_size)
 
-    def get_current_lr(self):
-        """
-        Retrieve the current learning rate from the optimizer.
-        """
-        return self.lr_schedulers().get_last_lr()[0]
+    def training_step(self, batch, batch_idx):
+        return self.forward_step(batch, batch_idx, prefix='train')
 
-    def forward(self, x):
-        return self.model(x)
+    def validation_step(self, batch, batch_idx):
+        return self.forward_step(batch, batch_idx, prefix='val')
+
+    def test_step(self, batch, batch_idx):
+        return self.forward_step(batch, batch_idx, prefix='test')
 
     def forward_step(self, batch, batch_idx, prefix):
         x = batch[0]
@@ -503,28 +509,39 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         # Reconstruct
         decoded = self(x)
 
-        bce_recon_loss = self.binary_cross_entropy(decoded, y)
+        bce_recon_loss = self.loss_function(decoded, y, "bce")
+        ce_loss = self.loss_function(decoded, y, "ce")
 
-        self.compute_and_log_metrics(bce_recon_loss, decoded, y, batch_idx, prefix)
-        return bce_recon_loss
+        self.compute_and_log_metrics(bce_recon_loss, ce_loss, decoded, y, batch_idx, prefix)
+        return bce_recon_loss if self.loss == "bce" else ce_loss
 
-    def compute_and_log_metrics(self, loss, decoded, y, batch_idx, prefix):
+    def loss_function(self, x_hat, x, loss):
+        if loss == "bce":
+            return self.bce_loss(x_hat, x)
+        elif loss == "ce":
+            return self.ce_loss(x_hat.view(-1, self.charset_size), x.argmax(dim=-1).view(-1))
+        else:
+            raise ValueError(f"Invalid loss function: {self.loss}")
+
+    def compute_and_log_metrics(self, bce_loss, ce_loss, decoded, y, batch_idx, prefix):
         """
         Compute and log metrics for the current step.
 
         Args:
-            loss: The reconstruction loss for the current step.
-            decoded: The model's predictions.
-            y: The ground truth sequences.
-            batch_idx: The index of the current batch.
-            prefix: The prefix for logging (e.g., 'train', 'val', 'test').
+            :param bce_loss: The reconstruction bce_loss for the current step.
+            :param ce_loss: The reconstruction ce_loss for the current step.
+            :param decoded: The model's predictions.
+            :param y: The ground truth sequences.
+            :param batch_idx: The index of the current batch.
+            :param prefix: The prefix for logging (e.g., 'train', 'val', 'test').
 
         Returns:
-            recon_loss: The reconstruction loss for the current step.
+            recon_loss: The reconstruction bce_loss for the current step.
         """
 
-        # Log reconstruction loss
-        self.log(f'{prefix}/binary_ce_recon_loss', loss, prog_bar=True, sync_dist=True)
+        # Log reconstruction bce_loss
+        self.log(f'{prefix}/binary_ce_recon_loss', bce_loss, prog_bar=True, sync_dist=True)
+        self.log(f'{prefix}/cross_entropy_recon_loss', ce_loss, prog_bar=True, sync_dist=True)
 
         # Log learning rate only if not in test phase
         if self.trainer.state.stage != "test":
@@ -533,6 +550,12 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         # Compute metrics
         y_hat = decoded.argmax(dim=-1)
         y_classes = y.argmax(dim=-1)
+
+        # Perfectly reconstructed molecules
+        is_perfect = (y_hat == y_classes).all(dim=1)
+        perfect_recon_count = is_perfect.sum()  # Total perfect reconstructions
+        total_molecules = is_perfect.numel()  # Total molecules in the batch
+        self.perfect_recon_tracker.update(perfect_recon_count / total_molecules)  # Track proportion
 
         self.binarized_accuracy.update(decoded, y)
         self.binarized_precision.update(decoded, y)
@@ -545,20 +568,16 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
 
         # Log predictions visualization periodically
         if batch_idx % 10 == 0:
-            predictions_img = prediction_visualization_figure(decoded, y, self.charset_length, self.idx_to_char)
-            token_dist_img = token_distribution_visualization_figure(decoded, y, self.idx_to_char)
+            predictions_img = prediction_visualization_figure(decoded, y, self.charset_size, self.int_to_char)
+            token_dist_img = token_distribution_visualization_figure(decoded, y, self.int_to_char)
             self.logger.log_image(f'{prefix}/predictions', images=[predictions_img])
             self.logger.log_image(f'{prefix}/token_distribution', images=[token_dist_img])
 
-    def training_step(self, batch, batch_idx):
-        # Additional training-specific logic (if any) can be added here
-        return self.forward_step(batch, batch_idx, prefix='train')
-
-    def validation_step(self, batch, batch_idx):
-        return self.forward_step(batch, batch_idx, prefix='val')
-
-    def test_step(self, batch, batch_idx):
-        return self.forward_step(batch, batch_idx, prefix='test')
+    def get_current_lr(self):
+        """
+        Retrieve the current learning rate from the optimizer.
+        """
+        return self.lr_schedulers().get_last_lr()[0]
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.scheduler_params["rlr_initial_lr"])
@@ -623,6 +642,7 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         Returns a dictionary of common metrics to log and reset.
         """
         return {
+            'perfect_reconstruction': self.perfect_recon_tracker,
             'binarized_accuracy': self.binarized_accuracy,
             'binarized_precision': self.binarized_precision,
             'binarized_recall': self.binarized_recall,
@@ -644,3 +664,6 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
     def on_validation_end(self):
         # Log and reset validation metrics
         self.log_and_reset_metrics('val')
+
+    def forward(self, x):
+        return self.model(x)

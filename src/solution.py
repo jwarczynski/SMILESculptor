@@ -156,8 +156,8 @@ def parse_args():
         help="Number of epochs with no improvement after which training will be stopped (default: None)."
     )
     parser.add_argument(
-        "--early-stopping-monitor", type=str, default="val/loss",
-        help="Metric to monitor for early stopping (default: 'val/loss')."
+        "--early-stopping-monitor", type=str, default="val/binary_ce_recon_loss",
+        help="Metric to monitor for early stopping (default: 'val/bce_loss')."
     )
     parser.add_argument(
         "--early-stopping-mode", type=str, default="min", choices=["min", "max"],
@@ -167,7 +167,7 @@ def parse_args():
     # Tensor Core precision argument
     parser.add_argument(
         "--matmul-precision", type=str, choices=["highest", "high", "medium"],
-        default="highest",  # Default to 'highest' for balanced performance
+        default="high",  # Default to 'highest' for balanced performance
         help="Set the precision for Tensor Core matmul operations ('highest', 'high', or 'medium'). Default: 'highest'."
     )
 

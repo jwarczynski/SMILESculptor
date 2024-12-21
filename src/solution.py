@@ -180,6 +180,9 @@ if __name__ == "__main__":
 
     torch.set_float32_matmul_precision(args.matmul_precision)
 
+    # Set seed
+    seed_everything(args.seed)
+
     # Load the YAML configuration file
     config = load_config(args.config)
 

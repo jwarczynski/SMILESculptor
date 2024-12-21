@@ -62,12 +62,14 @@ class MOAVEncoder(nn.Module):
             out_features = layer_params["dimension"]
             dense_layers.append(nn.Linear(in_features, out_features))
 
-            if "dropout" in layer_params:
-                dense_layers.append(nn.Dropout(layer_params["dropout"]))
             if "batch_norm" in layer_params:
                 dense_layers.append(nn.BatchNorm1d(out_features))
 
             dense_layers.append(getattr(nn, layer_params["activation"])())
+
+            if "dropout" in layer_params:
+                dense_layers.append(nn.Dropout(layer_params["dropout"]))
+
             in_features = out_features
 
         self.dense_layers = nn.Sequential(*dense_layers)

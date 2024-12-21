@@ -146,7 +146,6 @@ class MOVAE(nn.Module):
 
     def forward(self, x):
         encoded = self.encoder(x)
-        print(encoded.shape)
         return self.decoder(encoded)
 
 

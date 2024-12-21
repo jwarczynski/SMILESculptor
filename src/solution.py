@@ -218,9 +218,7 @@ if __name__ == "__main__":
 
     # Instantiate the model
     model = instantiate_class(model_config["name"], model_args)
-
-    # Set seed
-    seed_everything(args.seed)
+    print(model.model)
 
     wandb_logger = WandbLogger(
         project=args.project_name,

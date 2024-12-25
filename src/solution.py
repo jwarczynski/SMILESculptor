@@ -112,13 +112,12 @@ def run(config):
     data_module_result = call_function("src.data_loader." + data_module_config["function"], data_module_config["args"])
     data_module, max_len, _ = data_module_result
 
-    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
-    if src_path not in sys.path:
-        print("appending src path")
-        sys.path.append(src_path)
-
     if config.data.vectorizer_path is not None:
         pprint(f'vectorizer path: {config.data.vectorizer_path}')
+
+        src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+        sys.path.append(src_path)
+
         sv = pickle.load(open(config.data.vectorizer_path, 'rb'))
         int_to_char = sv.int_to_char
 

@@ -1,4 +1,4 @@
-from visualisations import prediction_visualization_figure, token_distribution_visualization_figure, \
+from src.visualisations import prediction_visualization_figure, token_distribution_visualization_figure, \
     latent_space_visualization_figure, distance_correlation_figure
 
 import torch

@@ -24,18 +24,59 @@ def load_config(file_path):
 
 
 def instantiate_class(class_name, class_args):
-    """Dynamically instantiate a class by name."""
-    cls = globals().get(class_name)
-    if cls is None:
-        raise ValueError(f"Class {class_name} not found.")
-    return cls(**class_args)
+    """
+    Dynamically instantiate a class by name.
+
+    Args:
+        class_name (str): The name of the class, optionally in 'module.ClassName' format.
+        class_args (dict): The arguments to pass to the class constructor.
+
+    Returns:
+        object: An instance of the specified class.
+
+    Raises:
+        ValueError: If the class cannot be found or instantiated.
+    """
+    # Split the module and class name if provided in 'module.ClassName' format
+    if '.' in class_name:
+        module_name, cls_name = class_name.rsplit('.', 1)
+        try:
+            # Dynamically import the module
+            module = importlib.import_module(module_name)
+            cls = getattr(module, cls_name)
+        except (ImportError, AttributeError) as e:
+            raise ValueError(f"Class {class_name} not found: {e}")
+    else:
+        # Use globals() as a fallback if no module is provided
+        cls = globals().get(class_name)
+        if cls is None:
+            raise ValueError(f"Class {class_name} not found in globals.")
+
+    # Instantiate the class with the provided arguments
+    try:
+        return cls(**class_args)
+    except TypeError as e:
+        raise ValueError(f"Error instantiating {class_name}: {e}")
 
 
 def call_function(function_name, function_args):
     """Dynamically call a function by name."""
-    func = globals().get(function_name)
-    if func is None:
-        raise ValueError(f"Function {function_name} not found.")
+    # Split the module and function name if provided in 'module.function' format
+    if '.' in function_name:
+        module_name, func_name = function_name.rsplit('.', 1)
+        try:
+            # Dynamically import the module
+            module = importlib.import_module(module_name)
+            func = getattr(module, func_name)
+        except (ImportError, AttributeError) as e:
+            raise ValueError(f"Function {function_name} not found: {e}")
+    else:
+        # Use globals() as a fallback if no module is provided
+        func = globals().get(function_name)
+        if func is None:
+            raise ValueError(f"Function {function_name} not found in globals.")
+
+    # Call the function with the provided arguments
     return func(**function_args)
 
 

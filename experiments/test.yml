@@ -1,0 +1,27 @@
+---
+model:
+  config: configs/movae_simple_config.yml
+  loss: bce
+  seed: 42
+data:
+  batch_size: 2
+  moles_path: data/moles_ohe_no_stereo_sv_500k.npy
+  int_to_char_path: data/itc_500k.pkl
+  vectorizer_path: data/sv_no_stereo_500.pkl
+trainer:
+  max_epochs: 4
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  limit_train_batches: 2
+  limit_val_batches: 2
+  limit_test_batches: 2
+  overfit_batches: 1
+  enable_progress_bar: true
+  early_stopping_patience: 10
+  devices: 1
+wandb:
+  project: Test
+  name: test_ru n_v0
+  tags:
+  - test
+  - example

@@ -592,10 +592,10 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         )
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val/binary_ce_recon_loss"  # The metric to monitor
-            }
+            # "lr_scheduler": {
+            #     "scheduler": scheduler,
+            #     "monitor": "val/binary_ce_recon_loss"  # The metric to monitor
+            # }
         }
 
     def sync_metric(self, metric):

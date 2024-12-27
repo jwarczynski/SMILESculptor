@@ -569,11 +569,11 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         self.f1.update(y_hat, y_classes)
 
         # Log predictions visualization periodically
-        if batch_idx % 10 == 0:
+        if batch_idx % 500 == 0:
             predictions_img = prediction_visualization_figure(decoded, y, self.charset_size, self.int_to_char)
-            token_dist_img = token_distribution_visualization_figure(decoded, y, self.int_to_char)
+            # token_dist_img = token_distribution_visualization_figure(decoded, y, self.int_to_char)
             self.logger.log_image(f'{prefix}/predictions', images=[predictions_img])
-            self.logger.log_image(f'{prefix}/token_distribution', images=[token_dist_img])
+            # self.logger.log_image(f'{prefix}/token_distribution', images=[token_dist_img])
 
     def get_current_lr(self):
         """

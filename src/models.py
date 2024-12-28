@@ -273,21 +273,11 @@ class MOVVAELightning(L.LightningModule):
         return self.optimizers().param_groups[0]["lr"]
 
     def configure_optimizers(self):
-        monitor = "val/binary_ce_recon_loss" if self.loss == "bce" else "val/cross_entropy_recon_loss"
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.scheduler_params["rlr_initial_lr"])
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=self.scheduler_params["rlr_factor"],
-            patience=self.scheduler_params["rlr_patience"],
-            min_lr=self.scheduler_params["rlr_mindelta"]
-        )
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.5)
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": monitor  # The metric to monitor
-            }
+            "lr_scheduler": scheduler
         }
 
     def on_before_optimizer_step(self, optimizer):

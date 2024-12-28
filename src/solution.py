@@ -12,9 +12,9 @@ from lightning.pytorch.loggers import WandbLogger
 from pprint import pprint
 
 
-from SmilesVectorizer import SmilesVectorizer
-from data_loader import create_data_module
-from models import *
+from src.SmilesVectorizer import SmilesVectorizer
+from src.data_loader import create_data_module
+from src.models import *
 
 
 def load_config(file_path):

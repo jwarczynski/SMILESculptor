@@ -9,7 +9,7 @@ from rdkit import Chem
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
 
-from SmilesVectorizer import SmilesVectorizer
+from .SmilesVectorizer import SmilesVectorizer
 
 
 def one_hot_encode(index, length):

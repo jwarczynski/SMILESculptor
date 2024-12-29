@@ -247,12 +247,14 @@ if __name__ == "__main__":
             )
         )
 
+    from src.callbacks import EarlyStoppingExt
     if args.early_stopping_patience is not None:
         callbacks.append(
-            EarlyStopping(
+            EarlyStoppingExt(
                 monitor=args.early_stopping_monitor,
                 patience=args.early_stopping_patience,
-                mode=args.early_stopping_mode
+                mode=args.early_stopping_mode,
+                reset_on_improvement=True
             )
         )
 

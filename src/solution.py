@@ -175,8 +175,6 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    torch.multiprocessing.set_start_method("spawn", force=True)
-
     args = parse_args()
     pprint(vars(args))
 

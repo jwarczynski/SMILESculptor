@@ -1,3 +1,4 @@
+---
 model:
   name: MOVVAELightning
   args:
@@ -10,19 +11,19 @@ model:
             out_channels: 9
             kernel_size: 9
             activation: Tanh
-            batch_norm: True
+            batch_norm: true
             name: encoder_conv_1
           conv_2:
             out_channels: 9
             kernel_size: 9
             activation: Tanh
-            batch_norm: True
+            batch_norm: true
             name: encoder_conv_2
           conv_3:
             out_channels: 10
             kernel_size: 11
             activation: Tanh
-            batch_norm: True
+            batch_norm: true
             name: encoder_conv_3
         flatten_layers:
           name: encoder_flatten
@@ -32,22 +33,22 @@ model:
             activation: Tanh
             name: encoder_dense_1
             dropout: 0.083
-            batch_norm: True
-#        sampling_layers:
-#          activation: Tanh
-#          mean: 0.0
-#          stddev: 0.01
-#        latent_dimension: 192
+            batch_norm: true
+        sampling_layers:
+          activation: Tanh
+          mean: 0.0
+          stddev: 0.01
+        latent_dimension: 192
 
       decoder_params:
-        latent_dimension: 436
+        latent_dimension: 192
         dense_layers:
           dense_1:
             dimension: 436
             activation: Tanh
             name: encoder_dense_1
             dropout: 0.1
-            batch_norm: True
+            batch_norm: true
         recurrent_layers:
           num_layers: 3
           dimension: 488
@@ -59,4 +60,3 @@ data_module:
     batch_size: 512
     path: data/moles_ohe_500k.npy
     seed: 42
-

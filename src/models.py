@@ -104,21 +104,30 @@ class MOAVEncoder(nn.Module):
             params = params["sampling_layers"]
             activation = getattr(nn, params["activation"])
             self.sampling_layers = nn.Sequential(
-                nn.Linear(in_features, latent_dim),
+                nn.Linear(in_features, latent_dim * 2),  # mean and log_var
                 activation()
             )
 
-    def forward(self, x):
+    def forward(self, x, eps=1e-8):
         """
         Forward pass of the encoder
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, max_length, charset_size)
+            x (torch.Tensor): Input tensor of shape (batch_size, max_length, charset_length)
+            eps (float): Small value to avoid numerical instability
         """
         x = self.conv_layers(x)
         x = self.flatten(x)
         x = self.dense_layers(x)
-        return self.sampling_layers(x) if hasattr(self, "sampling_layers") else x
+        z_mean, z_log_var = self.sampling_layers(x).chunk(2, dim=-1)
+
+        std_dev = self.softplus(z_log_var) + eps
+        std_dev_tril = torch.diag_embed(std_dev)
+
+        dist = torch.distributions.MultivariateNormal(z_mean, scale_tril=std_dev_tril)
+        z = dist.rsample()
+
+        return z, z_mean, std_dev
 
 
 class MOVAEDecoder(nn.Module):
@@ -170,8 +179,8 @@ class MOVAE(nn.Module):
         self.decoder = MOVAEDecoder(decoder_params, charset_length, max_length)
 
     def forward(self, x):
-        encoded = self.encoder(x)
-        return self.decoder(encoded)
+        z, z_mean, std_dev = self.encoder(x)
+        return self.decoder(z), z, z_mean, std_dev
 
 
 class MOVVAELightning(L.LightningModule):
@@ -218,13 +227,17 @@ class MOVVAELightning(L.LightningModule):
         x = x.transpose(-2, -1)
 
         # Reconstruct
-        decoded = self(x)
+        decoded, latent, latent_mean, latent_std_dev = self(x)
 
         bce_recon_loss = self.loss_function(decoded, y, "bce")
         ce_loss = self.loss_function(decoded, y, "ce")
+        kl_loss = self.kl_loss(latent_mean, latent_std_dev)
 
-        self.compute_and_log_metrics(bce_recon_loss, ce_loss, decoded, y, batch_idx, prefix)
-        return bce_recon_loss if self.loss == "bce" else ce_loss
+        loss = bce_recon_loss if self.loss == "bce" else ce_loss
+        loss += self.kl_weight * kl_loss
+
+        self.compute_and_log_metrics(bce_recon_loss, ce_loss, kl_loss, decoded, y, batch_idx, prefix)
+        return loss
 
     def loss_function(self, x_hat, x, loss):
         if loss == "bce":
@@ -234,7 +247,16 @@ class MOVVAELightning(L.LightningModule):
         else:
             raise ValueError(f"Invalid loss function: {self.loss}")
 
-    def compute_and_log_metrics(self, bce_loss, ce_loss, decoded, y, batch_idx, prefix):
+    def kl_loss(self, z_mean, std_dev_hat):
+        dist_std = torch.distributions.MultivariateNormal(
+            torch.zeros_like(z_mean, device=z_mean.device),
+            scale_tril=torch.eye(z_mean.shape[-1], device=z_mean.device).unsqueeze(0).repeat(z_mean.shape[0], 1, 1)
+        )
+        dist_hat = torch.distributions.MultivariateNormal(z_mean, scale_tril=torch.diag_embed(std_dev_hat))
+
+        return torch.distributions.kl.kl_divergence(dist_hat, dist_std).mean()
+
+    def compute_and_log_metrics(self, bce_loss, ce_loss, kl_loss, decoded, y, batch_idx, prefix):
         """
         Compute and log metrics for the current step.
 
@@ -253,6 +275,7 @@ class MOVVAELightning(L.LightningModule):
         # Log reconstruction bce_loss
         self.log(f'{prefix}/binary_ce_recon_loss', bce_loss, prog_bar=True, sync_dist=True)
         self.log(f'{prefix}/cross_entropy_recon_loss', ce_loss, prog_bar=True, sync_dist=True)
+        self.log(f'{prefix}/kl_loss', kl_loss, prog_bar=True, sync_dist=True)
 
         # Log learning rate only if not in test phase
         if self.trainer.state.stage != "test":

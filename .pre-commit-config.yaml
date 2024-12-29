@@ -1,0 +1,35 @@
+---
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.20.0
+    hooks:
+      - id: gitleaks
+        entry: gitleaks git --pre-commit --redact --staged --verbose
+
+  - repo: https://github.com/jorisroovers/gitlint
+    rev: v0.19.1
+    hooks:
+      - id: gitlint
+        language_version: python3
+        args: ["--commits", "HEAD~1..HEAD"]
+        files: ^.*\.(md|txt)$
+        exclude: ^.*\.git/.*
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.26.3
+    hooks:
+      - id: yamllint
+        language_version: python3
+        args: ["-f", "parsable", "-s"]
+        files: ^.*\.(yml|yaml)$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      # Run the linter.
+      - id: ruff
+        types_or: [python, pyi]
+      # args: [ --fix ]
+      # Run the formatter.
+      - id: ruff-format
+        types_or: [python, pyi]

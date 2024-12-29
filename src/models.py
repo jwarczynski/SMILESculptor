@@ -8,6 +8,31 @@ from torch.distributed import all_reduce, ReduceOp
 
 import lightning as L
 
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+
+class MetricsWrapper:
+    def __init__(self, metric_fn, average=None, zero_division=0):
+        self.metric_fn = metric_fn
+        self.average = average
+        self.y_true = []
+        self.y_pred = []
+        self.zero_division = zero_division
+
+    def __call__(self, y_pred, y_true):
+        self.update(y_pred, y_true)
+
+    def update(self, y_pred, y_true):
+        self.y_true.extend(y_true.cpu().numpy().flatten())
+        self.y_pred.extend(y_pred.cpu().numpy().flatten())
+
+    def compute(self):
+        return self.metric_fn(self.y_true, self.y_pred, average=self.average, zero_division=self.zero_division)
+
+    def reset(self):
+        self.y_true = []
+        self.y_pred = []
+
 
 def calculate_conv_output_size(input_size, conv_params):
     """
@@ -173,16 +198,10 @@ class MOVVAELightning(L.LightningModule):
 
         # Classification metrics
         self.perfect_recon_tracker = torchmetrics.MeanMetric()
-
-        self.binarized_accuracy = torchmetrics.Accuracy(task='binary')
-        self.binarized_precision = torchmetrics.Precision(task='binary')
-        self.binarized_recall = torchmetrics.Recall(task='binary')
-        self.binarized_f1 = torchmetrics.F1Score(task='binary')
-
         self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=charset_size)
-        self.precision = torchmetrics.Precision(task='multiclass', num_classes=charset_size)
-        self.recall = torchmetrics.Recall(task='multiclass', num_classes=charset_size)
-        self.f1 = torchmetrics.F1Score(task='multiclass', num_classes=charset_size)
+        self.precision = MetricsWrapper(precision_score, average='macro')
+        self.recall = MetricsWrapper(recall_score, average='macro')
+        self.f1 = MetricsWrapper(f1_score, average='macro')
 
     def training_step(self, batch, batch_idx):
         return self.forward_step(batch, batch_idx, prefix='train')
@@ -249,10 +268,6 @@ class MOVVAELightning(L.LightningModule):
         total_molecules = is_perfect.numel()  # Total molecules in the batch
         self.perfect_recon_tracker.update(perfect_recon_count / total_molecules)  # Track proportion
 
-        self.binarized_accuracy.update(decoded, y)
-        self.binarized_precision.update(decoded, y)
-        self.binarized_recall.update(decoded, y)
-        self.binarized_f1.update(decoded, y)
         self.accuracy.update(y_hat, y_classes)
         self.precision.update(y_hat, y_classes)
         self.recall.update(y_hat, y_classes)
@@ -332,10 +347,6 @@ class MOVVAELightning(L.LightningModule):
         """
         return {
             'perfect_reconstruction': self.perfect_recon_tracker,
-            'binarized_accuracy': self.binarized_accuracy,
-            'binarized_precision': self.binarized_precision,
-            'binarized_recall': self.binarized_recall,
-            'binarized_f1': self.binarized_f1,
             'accuracy': self.accuracy,
             'precision': self.precision,
             'recall': self.recall,

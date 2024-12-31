@@ -3,3 +3,4 @@ extends: default
 rules:
   new-lines: disable
   key-ordering: false
+  comments-indentation: disable  # Disable the comment indentation rule

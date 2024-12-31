@@ -234,7 +234,7 @@ class MOVVAELightning(L.LightningModule):
         loss = bce_recon_loss if self.loss == "bce" else ce_loss
         loss += self.kl_weight * kl_loss
 
-        self.compute_and_log_metrics(loss, bce_recon_loss, ce_loss, kl_loss, decoded, y, batch_idx, prefix)
+        self.compute_and_log_metrics((loss, bce_recon_loss, ce_loss, kl_loss), latent_mean, decoded, y, batch_idx, prefix)
         return loss
 
     def loss_function(self, x_hat, x, loss):
@@ -249,13 +249,13 @@ class MOVVAELightning(L.LightningModule):
         kl_loss = -0.5 * torch.sum(1 + z_logvar - z_mean.pow(2) - z_logvar.exp(), dim=-1)
         return kl_loss.mean()
 
-    def compute_and_log_metrics(self, loss, bce_loss, ce_loss, kl_loss, decoded, y, batch_idx, prefix):
+    def compute_and_log_metrics(self, losses, latent_mean, decoded, y, batch_idx, prefix):
         """
         Compute and log metrics for the current step.
 
         Args:
-            :param bce_loss: The reconstruction bce_loss for the current step.
-            :param ce_loss: The reconstruction ce_loss for the current step.
+            :param losses: A tuple of the computed losses (totol_loss, bce_loss, ce__loss, kl_loss).
+            :param latent_mean: The mean of the latent space distribution.
             :param decoded: The model's predictions.
             :param y: The ground truth sequences.
             :param batch_idx: The index of the current batch.
@@ -265,6 +265,7 @@ class MOVVAELightning(L.LightningModule):
             recon_loss: The reconstruction bce_loss for the current step.
         """
 
+        loss, bce_loss, ce_loss, kl_loss = losses
         # Log reconstruction bce_loss
         self.log(f'{prefix}/binary_ce_recon_loss', bce_loss, prog_bar=True, sync_dist=True)
         self.log(f'{prefix}/cross_entropy_recon_loss', ce_loss, prog_bar=True, sync_dist=True)
@@ -300,9 +301,9 @@ class MOVVAELightning(L.LightningModule):
         # Log predictions visualization periodically
         if batch_idx % 500 == 0:
             predictions_img = prediction_visualization_figure(decoded, y, self.charset_size, self.int_to_char)
-            # token_dist_img = token_distribution_visualization_figure(decoded, y, self.int_to_char)
+            latent_space_img = latent_space_visualization_figure(latent_mean)
             self.logger.log_image(f'{prefix}/predictions', images=[predictions_img])
-            # self.logger.log_image(f'{prefix}/token_distribution', images=[token_dist_img])
+            self.logger.log_image(f'{prefix}/latent_space', images=[latent_space_img])
 
     def get_current_lr(self):
         """

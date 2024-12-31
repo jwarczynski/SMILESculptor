@@ -52,6 +52,10 @@ def parse_args():
         help="Path to the YAML configuration file."
     )
     parser.add_argument(
+        "--ignore-character", type=str, default=None,
+        help="Character to ignore when usign cross entropy loss (default: None)."
+    )
+    parser.add_argument(
         "--run-name", type=str, required=True,
         help="Name of the run (required)."
     )
@@ -215,6 +219,8 @@ if __name__ == "__main__":
     # Merge calculated args with YAML-configured args for the model
     model_config = config.get("model", {})
     model_args = {**model_config["args"], **calculated_args, "loss": args.loss}
+    if args.ignore_character is not None:
+        model_args["ignore_character"] = args.ignore_character
 
     # Instantiate the model
     model = instantiate_class(model_config["name"], model_args)

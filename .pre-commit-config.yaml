@@ -19,8 +19,9 @@ repos:
     rev: v1.26.3
     hooks:
       - id: yamllint
+        args: ["-c", ".yamllint"]
         language_version: python3
-        args: ["-f", "parsable", "-s"]
+#        args: ["-f", "parsable", "-s"]
         files: ^.*\.(yml|yaml)$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -29,7 +30,7 @@ repos:
       # Run the linter.
       - id: ruff
         types_or: [python, pyi]
-      # args: [ --fix ]
+      #  args: [--fix]
       # Run the formatter.
-      - id: ruff-format
-        types_or: [python, pyi]
+      # - id: ruff-format
+        # types_or: [python, pyi]

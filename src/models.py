@@ -197,9 +197,10 @@ class MOVVAELightning(L.LightningModule):
         self.loss = loss
         self.int_to_char = int_to_char or {}
         self.char_to_int = {v: k for k, v in int_to_char.items()}
+        self.ignore_index = self.char_to_int.get(ignore_character, None)
         self.bce_loss = nn.BCEWithLogitsLoss()
         self.ce_loss = nn.CrossEntropyLoss() if ignore_character is None\
-            else nn.CrossEntropyLoss(ignore_index=self.char_to_int[ignore_character])
+            else nn.CrossEntropyLoss(ignore_index=self.ignore_index)
         self.charset_size = charset_size
 
         # Classification metrics
@@ -278,11 +279,18 @@ class MOVVAELightning(L.LightningModule):
         y_hat = decoded.argmax(dim=-1)
         y_classes = y.argmax(dim=-1)
 
-        # Perfectly reconstructed molecules
-        is_perfect = (y_hat == y_classes).all(dim=1)
-        perfect_recon_count = is_perfect.sum()  # Total perfect reconstructions
-        total_molecules = is_perfect.numel()  # Total molecules in the batch
-        self.perfect_recon_tracker.update(perfect_recon_count / total_molecules)  # Track proportion
+        valid_mask = (y_classes != self.ignore_index)  # [batch, seq_len]
+
+        # Compare predictions with targets only for valid tokens
+        correct_tokens = (y_hat == y_classes) | ~valid_mask  # [batch, seq_len]
+        # True for matching tokens and ignored positions
+
+        # An example is perfect if all its valid tokens are correct
+        # all() over sequence length dimension
+        is_perfect = correct_tokens.all(dim=1)  # [batch]
+
+        perfect_recon_rate = is_perfect.float().mean()
+        self.perfect_recon_tracker.update(perfect_recon_rate)  # Track proportion
 
         self.accuracy.update(y_hat, y_classes)
         self.precision.update(y_hat, y_classes)

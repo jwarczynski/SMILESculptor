@@ -55,24 +55,15 @@ class EarlyStoppingExt(EarlyStopping):
         # Evaluate the stopping criteria
         should_stop, reason = super()._evaluate_stopping_criteria(current)
         if self.reset_on_improvement:
-            improve = self._evaluate_improvement_from_last_eval(current)
+            improve = self.monitor_op(current - self.min_delta, self.last_value)
 
             # should stop beacuse of no improvement w.r.t. best score but improvement from last eval
             # if should stop from another reason do not continue
-            if should_stop and self.wait_count >= self.patience and improve:
-                should_stop = False
-                reason = None
-                self.wait_count = 0
+            if should_stop and self.wait_count >= self.patience:
+                should_stop = not improve
+                reason = f"no improvement in monitored metric since last {self.patience} steps" if not improve else reason
+
+            self.wait_count = 0 if improve else self.wait_count
+            self.last_value = current
 
         return should_stop, reason
-
-    def _evaluate_improvement_from_last_eval(self, current):
-        improve = False
-        if self.monitor_op(current - self.min_delta, self.last_value):
-            improve = True
-
-        self.last_value = current
-        return improve
-
-
-

@@ -293,10 +293,12 @@ class MOVVAELightning(L.LightningModule):
         perfect_recon_rate = is_perfect.float().mean()
         self.perfect_recon_tracker.update(perfect_recon_rate)  # Track proportion
 
-        self.accuracy.update(y_hat, y_classes)
-        self.precision.update(y_hat, y_classes)
-        self.recall.update(y_hat, y_classes)
-        self.f1.update(y_hat, y_classes)
+        y_hat_valid = y_hat[valid_mask]
+        y_classes_valid = y_classes[valid_mask]
+        self.accuracy.update(y_hat_valid, y_classes_valid)
+        self.precision.update(y_hat_valid, y_classes_valid)
+        self.recall.update(y_hat_valid, y_classes_valid)
+        self.f1.update(y_hat_valid, y_classes_valid)
 
         # Log predictions visualization periodically
         if batch_idx % 500 == 0:
@@ -618,10 +620,10 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         )
         return {
             "optimizer": optimizer,
-            # "lr_scheduler": {
-            #     "scheduler": scheduler,
-            #     "monitor": "val/binary_ce_recon_loss"  # The metric to monitor
-            # }
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val/binary_ce_recon_loss"  # The metric to monitor
+            }
         }
 
     def sync_metric(self, metric):

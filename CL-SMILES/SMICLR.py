@@ -41,7 +41,7 @@ class SMILESEncoder(torch.nn.Module):
 
 class Net(torch.nn.Module):
     def __init__(self, dim, vocab_size, max_len, padding_idx,
-                 embedding_dim=64, num_layers=1, bidirectional=False):
+                 embedding_dim=64, num_layers=1, bidirectional=False, freeze_encoder=False):
         super(Net, self).__init__()
 
         self.vocab_size = vocab_size
@@ -51,6 +51,7 @@ class Net(torch.nn.Module):
         self.bidirectional = bidirectional
         self.dim = dim
         self.num_layers = num_layers
+        self.freeze_encoder = freeze_encoder
 
         self.emb = torch.nn.Embedding(
             num_embeddings=self.vocab_size,
@@ -70,6 +71,13 @@ class Net(torch.nn.Module):
             self.embedding_dim, 2 * self.dim, 
             self.num_layers, self.bidirectional
         )
+
+        if self.freeze_encoder:
+            for param in self.SMILESEnc1.parameters():
+                param.requires_grad = False
+
+            for param in self.SMILESEnc2.parameters():
+                param.requires_grad = False
 
         # Projection head
         self.g = torch.nn.Sequential(

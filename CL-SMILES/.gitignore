@@ -1,0 +1,5 @@
+*.npy
+zinc
+unlabeled_training
+unlabeled_val
+qm9

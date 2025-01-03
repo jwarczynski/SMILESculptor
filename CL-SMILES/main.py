@@ -150,6 +150,7 @@ if __name__ == '__main__':
     ).to(device)
     
     if load_weights:
+        print(f"loading weights from {load_weights}")
         weights = torch.load('{}/best_unsup_model.pth'.format(load_weights))
         model_dict = model.state_dict()
 

@@ -7,7 +7,7 @@ from SMICLR import SMILESEncoder
 
 class Net(torch.nn.Module):
     def __init__(self, dim, vocab_size, max_len, padding_idx,
-                embedding_dim=64, num_layers=1, bidirectional=False):
+                embedding_dim=64, num_layers=1, bidirectional=False, freeze_encoder=False):
         super(Net, self).__init__()
 
         self.vocab_size = vocab_size
@@ -17,6 +17,7 @@ class Net(torch.nn.Module):
         self.bidirectional = bidirectional
         self.dim = dim
         self.num_layers = num_layers
+        self.freeze_encoder = freeze_encoder
 
         self.emb = torch.nn.Embedding(
             num_embeddings=self.vocab_size,
@@ -29,6 +30,11 @@ class Net(torch.nn.Module):
             self.embedding_dim, 2 * self.dim, 
             self.num_layers, self.bidirectional
         )
+
+        # Freeze SMILESEncoder weights if freeze_encoder is True
+        if self.freeze_encoder:
+            for param in self.SMILESEnc1.parameters():
+                param.requires_grad = False
 
         self.fc1 = torch.nn.Linear((4 if bidirectional else 2) * self.dim, self.dim)
         self.fc2 = torch.nn.Linear(self.dim, 1)

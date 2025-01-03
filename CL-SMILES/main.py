@@ -62,6 +62,7 @@ if __name__ == '__main__':
     sup_size = args.sup_size
     output = args.output
     load_weights = args.load_weights
+    freeze_encoder = args.freeze_encoder
 
     data_qm9 = args.data_qm9
     data_anions = args.data_anions
@@ -145,7 +146,7 @@ if __name__ == '__main__':
     model = Net(
         lstm_dim, vocab_size=nchars, max_len=max_len,
         padding_idx=char_indices[''], embedding_dim=embedding_dim,
-        num_layers=num_layers, bidirectional=bidirectional
+        num_layers=num_layers, bidirectional=bidirectional, freeze_encoder=freeze_encoder
     ).to(device)
     
     if load_weights:

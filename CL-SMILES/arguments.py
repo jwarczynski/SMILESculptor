@@ -162,4 +162,11 @@ def arg_parse():
         help='Path to load the weights of the model'
     )
 
+    parser.add_argument(
+        '--freeze-encoder',
+        dest='freeze_encoder',
+        action='store_true',
+        help='Freeze the encoder weights'
+    )
+
     return parser.parse_args()

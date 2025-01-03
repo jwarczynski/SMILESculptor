@@ -140,7 +140,7 @@ if __name__ == '__main__':
             dataset, transform=Complete(augmentation=True, max_len=max_len)
         ).shuffle()
     
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     model = Net(

@@ -14,7 +14,7 @@ $ python3 main.py --epochs=101 --no-lr-decay --temperature=.1 --batch=256 --outp
 ```
 Sample command to run the finetuning supervised training
 ```
-$ python3 main.py --epochs=301 --lr=1e-3 --batch=32 --load_weights result_seed_12200 --output sup_result --bidirectional --embedding_dim=64 --num-layers=3 --lstm_dim=64 --sup --target 15 --seed 12200 --output sup_15_12200 --qm9
+$ python3 main.py --epochs=301 --lr=1e-3 --batch=32 --load-weights result_seed_12200 --output sup_result --bidirectional --embedding_dim=64 --num-layers=3 --lstm_dim=64 --sup --target 15 --seed 12200 --output sup_15_12200 --qm9
 ```
 
 #### Cite

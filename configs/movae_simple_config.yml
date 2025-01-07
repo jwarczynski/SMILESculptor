@@ -1,7 +1,7 @@
 model:
   name: MoleculeAutoEncoderLightning
   args:
-    lr: 0.003
+    lr: 0.001
 
 data_module:
   function: create_data_module

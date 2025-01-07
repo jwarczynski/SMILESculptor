@@ -58,5 +58,5 @@ data_module:
   function: create_data_module
   args:
     batch_size: 512
-    path: data/moles_ohe_500k.npy
+    path: data/moles_ohe_no_stereo_sv_500k.npy
     seed: 42

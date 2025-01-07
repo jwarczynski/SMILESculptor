@@ -483,7 +483,7 @@ class MoleculeAutoEncoder(nn.Module):
 
 
 class MoleculeAutoEncoderLightning(L.LightningModule):
-    def __init__(self, charset_size, seq_len, loss, int_to_char, lr=1e-3):
+    def __init__(self, charset_size, seq_len, loss, int_to_char, ignore_character=None, lr=1e-3):
         super().__init__()
 
         # Model Architecture
@@ -495,10 +495,14 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         # Model
         self.model = MoleculeAutoEncoder(charset_size, seq_len)
 
-        # Loss Function
         self.loss = loss
+        self.int_to_char = int_to_char or {}
+        self.char_to_int = {v: k for k, v in int_to_char.items()}
+        self.ignore_index = self.char_to_int.get(ignore_character, None)
         self.bce_loss = nn.BCEWithLogitsLoss()
-        self.ce_loss = nn.CrossEntropyLoss()
+        self.ce_loss = nn.CrossEntropyLoss() if ignore_character is None \
+            else nn.CrossEntropyLoss(ignore_index=self.ignore_index)
+        self.charset_size = charset_size
 
         # Learning Rate Scheduler Parameters
         self.scheduler_params = {
@@ -511,16 +515,10 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
 
         # Classification metrics
         self.perfect_recon_tracker = torchmetrics.MeanMetric()
-
-        self.binarized_accuracy = torchmetrics.Accuracy(task='binary')
-        self.binarized_precision = torchmetrics.Precision(task='binary')
-        self.binarized_recall = torchmetrics.Recall(task='binary')
-        self.binarized_f1 = torchmetrics.F1Score(task='binary')
-
         self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=charset_size)
-        self.precision = torchmetrics.Precision(task='multiclass', num_classes=charset_size)
-        self.recall = torchmetrics.Recall(task='multiclass', num_classes=charset_size)
-        self.f1 = torchmetrics.F1Score(task='multiclass', num_classes=charset_size)
+        self.precision = MetricsWrapper(precision_score, average='macro')
+        self.recall = MetricsWrapper(recall_score, average='macro')
+        self.f1 = MetricsWrapper(f1_score, average='macro')
 
     def training_step(self, batch, batch_idx):
         return self.forward_step(batch, batch_idx, prefix='train')
@@ -581,20 +579,25 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         y_hat = decoded.argmax(dim=-1)
         y_classes = y.argmax(dim=-1)
 
-        # Perfectly reconstructed molecules
-        is_perfect = (y_hat == y_classes).all(dim=1)
-        perfect_recon_count = is_perfect.sum()  # Total perfect reconstructions
-        total_molecules = is_perfect.numel()  # Total molecules in the batch
-        self.perfect_recon_tracker.update(perfect_recon_count / total_molecules)  # Track proportion
+        valid_mask = (y_classes != self.ignore_index)  # [batch, seq_len]
 
-        self.binarized_accuracy.update(decoded, y)
-        self.binarized_precision.update(decoded, y)
-        self.binarized_recall.update(decoded, y)
-        self.binarized_f1.update(decoded, y)
-        self.accuracy.update(y_hat, y_classes)
-        self.precision.update(y_hat, y_classes)
-        self.recall.update(y_hat, y_classes)
-        self.f1.update(y_hat, y_classes)
+        # Compare predictions with targets only for valid tokens
+        correct_tokens = (y_hat == y_classes) | ~valid_mask  # [batch, seq_len]
+        # True for matching tokens and ignored positions
+
+        # An example is perfect if all its valid tokens are correct
+        # all() over sequence length dimension
+        is_perfect = correct_tokens.all(dim=1)  # [batch]
+
+        perfect_recon_rate = is_perfect.float().mean()
+        self.perfect_recon_tracker.update(perfect_recon_rate)  # Track proportion
+
+        y_hat_valid = y_hat[valid_mask]
+        y_classes_valid = y_classes[valid_mask]
+        self.accuracy.update(y_hat_valid, y_classes_valid)
+        self.precision.update(y_hat_valid, y_classes_valid)
+        self.recall.update(y_hat_valid, y_classes_valid)
+        self.f1.update(y_hat_valid, y_classes_valid)
 
         # Log predictions visualization periodically
         if batch_idx % 500 == 0:
@@ -607,23 +610,15 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         """
         Retrieve the current learning rate from the optimizer.
         """
-        return self.lr_schedulers().get_last_lr()[0]
+        # return self.lr_schedulers().get_last_lr()[0]
+        return self.optimizers().param_groups[0]["lr"]
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.scheduler_params["rlr_initial_lr"])
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=self.scheduler_params["rlr_factor"],
-            patience=self.scheduler_params["rlr_patience"],
-            min_lr=self.scheduler_params["rlr_mindelta"]
-        )
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val/binary_ce_recon_loss"  # The metric to monitor
-            }
+            "lr_scheduler": scheduler
         }
 
     def sync_metric(self, metric):
@@ -673,10 +668,6 @@ class MoleculeAutoEncoderLightning(L.LightningModule):
         """
         return {
             'perfect_reconstruction': self.perfect_recon_tracker,
-            'binarized_accuracy': self.binarized_accuracy,
-            'binarized_precision': self.binarized_precision,
-            'binarized_recall': self.binarized_recall,
-            'binarized_f1': self.binarized_f1,
             'accuracy': self.accuracy,
             'precision': self.precision,
             'recall': self.recall,
